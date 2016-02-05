@@ -12,53 +12,50 @@
 using namespace std;
 using namespace cv;
 using namespace LaneDetector;
-const char* _wndname0 = "Lane Detection Demo";
-const char* _wndname1 = "IPM";
-const char* _wndname2 = "Lane Detection Demo";
+
 int _laneWidth = 5;
 int _houghMinLength = 50;
 int _numVps = 1;
-int _scale = 1;
+float _scale = 0.5;
 
-float _focalLengthX=309.4362;
-float _focalLengthY = 344.2161;
-float _opticalCenterX = 317.9034;
-float _opticalCenterY = 256.5352;
-float _dist = 2179.8;
-float _pitch = 14 * CV_PI / 180;
+//float _focalLengthX=309.4362;
+//float _focalLengthY = 344.2161;
+//float _opticalCenterX = 317.9034;
+//float _opticalCenterY = 256.5352;
+//float _dist = 2179.8;
+//float _pitch = 14 * CV_PI / 180;
+//float _yaw = 0;
+
+float _focalLengthX = 2013.6773;
+float _focalLengthY = 2004.6982;
+float _opticalCenterX = 824.9676;
+float _opticalCenterY = 508.4846;
+float _dist = 1500;
+float _pitch = -2* CV_PI / 180;
 float _yaw = 0;
 
+float _left = 0;
+float _right = 1920;
+float _top = 670;
+float _button = 1080;
 
-
-
-
-void process(Mat imageOrigin,IPMInfo &ipmInfo, CameraInfo &cameraInfo, LaneDetectorConf * LineConf)
-{
-
-
-}
 
 int main()
 {
-	//namedWindow(_wndname0, WINDOW_AUTOSIZE);
-	//namedWindow(_wndname1, WINDOW_AUTOSIZE);
 	IPMInfo ipmInfo;
 	ipmInfo.vpPortion = 0;
-	ipmInfo.ipmLeft = 56;
-	ipmInfo.ipmRight = 573;
-	//ipmInfo.ipmTop = 185;
-	ipmInfo.ipmTop = 220;
-	ipmInfo.ipmBottom = 345;
+	ipmInfo.ipmLeft = _left * _scale;
+	ipmInfo.ipmRight = _right * _scale;
+	ipmInfo.ipmTop = _top * _scale;
+	ipmInfo.ipmBottom = _button * _scale;
 	ipmInfo.ipmInterpolation = 0;
 
 	CameraInfo cameraInfo;
-	//cameraInfo.pitch = _pitch;
-
-	cameraInfo.cameraHeight = _dist;
-	cameraInfo.focalLength.x = _focalLengthX;
-	cameraInfo.focalLength.y = _focalLengthY;
-	cameraInfo.opticalCenter.x = _opticalCenterX;
-	cameraInfo.opticalCenter.y = _opticalCenterY;
+	cameraInfo.cameraHeight = _dist*_scale;
+	cameraInfo.focalLength.x = _focalLengthX*_scale;
+	cameraInfo.focalLength.y = _focalLengthY*_scale;
+	cameraInfo.opticalCenter.x = _opticalCenterX*_scale;
+	cameraInfo.opticalCenter.y = _opticalCenterY*_scale;
 
 	LaneDetectorConf *LineConf = new LaneDetectorConf;
 	LineConf->rStep = 1;
@@ -79,8 +76,7 @@ int main()
 	LineConf->ransacSplineWindow=15;
 	LineConf->ransacSplineStep=0.1;
 	LineConf->ransacLineNumGoodFit = 5;
-
-	LineConf->ransacSplineNumSamples = 4;
+	LineConf->ransacSplineNumSamples = 5;
 	LineConf->ransacSplineNumIterations = 40;
 	LineConf->ransacSplineThreshold = 0.2;
 	LineConf->ransacSplineScoreThreshold = 1;
@@ -92,29 +88,27 @@ int main()
 	LineConf->splineScoreStep = 0.01;
 	LineConf->ransacSplineBinarize = 1;
 	LineConf->ransacSplineWindow = 10;
-	LineConf->ransacLine = 1;
+	LineConf->ransacLine = 0;
+	LineConf->ransacSpline = 1;
 
-
-	//LineConf->getEndPoints;
-
-
-
-
-	ifstream fin("C:\\Users\\bowen\\Documents\\TCL\\LaneDetection\\cordova1\\imagelist.txt");
+	ifstream fin("C:\\Users\\bowen\\Documents\\TCL\\LaneDetection\\video0\\imagelist.txt");
 	char str[250][256];//存300个图像路径的字符数组
 	int n = 0;
 	Mat imageOrigin;
-	Mat imageResize, imageGrey;
-	VP vp(_laneWidth, _houghMinLength, _numVps);
+	//Size dsize = Size(imageOrigin.cols*_scale,imageOrigin.rows*_scale);
+	Mat imageResize;
+	Mat imageGrey;
+	//VP vp(_laneWidth, _houghMinLength, _numVps);
 	while (fin.getline(str[n], 256) && n<250)   // 获取每个图像的路径
 	{
 		imageOrigin = imread(str[n], 1);
-		//imshow(_wndname0, imageOrigin);
-
+		if (!imageOrigin.data)
+		{
+			cout << "can't read data!" << endl;
+			return -1;
+		}
 		resize(imageOrigin, imageResize, Size(), _scale, _scale, INTER_AREA);
 		cvtColor(imageResize, imageGrey, CV_RGB2GRAY);
-		//vp.findVinshingPoints(imageGrey);
-
 		Size size = imageResize.size();
 		cameraInfo.imageWidth = size.width;
 		cameraInfo.imageHeight = size.height;
@@ -125,7 +119,7 @@ int main()
 
 		imageGrey.convertTo(imageGrey, CV_32F);
 		const CvMat cvImage = imageGrey;
-		const CvMat clrImage = imageResize;
+		const CvMat clrImage = imageResize.clone();
 		CvMat *ipm;
 		ipm = cvCreateMat(cvImage.height, cvImage.width, cvImage.type);
 		mcvGetIPM(&cvImage, ipm, &ipmInfo, &cameraInfo);  //image after IPM
@@ -167,19 +161,6 @@ int main()
 		mcvThresholdLower(ipm, ipm, qtileThreshold);
 		//SHOW_IMAGE(ipm, "Before Hough", 1);
 
-
-		////morphologyex   
-		//CvMat *ipm_temp;
-		//cvThreshold(ipm, ipm, 0, 255, CV_THRESH_BINARY); //0.05
-		//Mat ipm_mat0 = Mat(ipm, true);
-		//imshow("binary", ipm_mat0);
-		//dilate(ipm_mat0, ipm_mat0, Mat());
-		//morphologyEx(ipm_mat0, ipm_mat0, MORPH_CLOSE, Mat(5, 5, CV_32F));
-		//morphologyEx(ipm_mat0, ipm_mat0, MORPH_OPEN, Mat(3, 3, CV_32F));
-		//imshow("after morphologyex", ipm_mat0);
-
-
-
 		vector<float> lineScores, splineScores;
 		vector<Spline>Splines;
 		vector<Line> Lines;
@@ -195,6 +176,8 @@ int main()
 		CvSize inSize = cvSize(imDisplay.width - 1, imDisplay.height - 1);
 		vector<Spline> Splines_ipm = Splines;
 		mcvSplinesImIPM2Im(Splines,ipmInfo,cameraInfo,inSize);
+		CvMat *fipm = cvCloneMat(ipm);
+		//mcvPostprocessLines(&cvImage, &clrImage, fipm, ipm, Lines, lineScores,Splines, splineScores,LineConf, state, ipmInfo, cameraInfo);
 
 		for (int i = 0; i < Splines.size(); i++)
 		{
