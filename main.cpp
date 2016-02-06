@@ -7,13 +7,14 @@
 #include "LaneDetector.h"
 #include "CameraInfoOpt.h"
 #include<fstream>
+//#include "Main.h"
 //#include "mcv.hh"
 //#define DEBUG
 using namespace std;
 using namespace cv;
 using namespace LaneDetector;
 
-int _laneWidth = 5;
+int _laneWidth = 20;
 int _houghMinLength = 50;
 int _numVps = 1;
 float _scale = 0.5;
@@ -31,13 +32,39 @@ float _focalLengthY = 2004.6982;
 float _opticalCenterX = 824.9676;
 float _opticalCenterY = 508.4846;
 float _dist = 1500;
-float _pitch = -2* CV_PI / 180;
-float _yaw = 0;
+float _pitch = -2.5* CV_PI / 180;
+float _yaw = 1 * CV_PI / 180;
 
-float _left = 0;
-float _right = 1920;
+float _left = 150;
+float _right = 1450;
 float _top = 670;
-float _button = 1080;
+float _button = 1920;
+
+
+void laneMarkingsDetector(cv::Mat &srcGRAY, cv::Mat &dstGRAY, int tau)
+{
+	Mat src_clone = srcGRAY.clone();
+	dstGRAY.setTo(0);
+	int aux = 0;
+	for (int j = 0; j < srcGRAY.rows; ++j)
+	{
+		unsigned char *ptRowSrc = src_clone.ptr<uchar>(j);
+		unsigned char *ptRowDst = dstGRAY.ptr<uchar>(j);
+		for (int i = tau; i < src_clone.cols - tau; ++i)
+		{
+			if (ptRowSrc[i] != 0)
+			{
+				aux = 2 * ptRowSrc[i];
+				aux += -ptRowSrc[i - tau];
+				aux += -ptRowSrc[i + tau];
+				aux += -abs((int)(ptRowSrc[i - tau] - ptRowSrc[i + tau]));
+				aux = (aux < 0) ? (0) : (aux);
+				aux = (aux > 255) ? (255) : (aux);
+				ptRowDst[i] = (unsigned char)aux;
+			}
+		}
+	}
+}
 
 
 int main()
@@ -49,6 +76,7 @@ int main()
 	ipmInfo.ipmTop = _top * _scale;
 	ipmInfo.ipmBottom = _button * _scale;
 	ipmInfo.ipmInterpolation = 0;
+
 
 	CameraInfo cameraInfo;
 	cameraInfo.cameraHeight = _dist*_scale;
@@ -66,7 +94,7 @@ int main()
 	LineConf->groupThreshold = 50;
 	LineConf->overlapThreshold = 0.3;
 	LineConf->ransacLineWindow = 15;
-	LineConf->ransacLineNumSamples =4 ;
+	LineConf->ransacLineNumSamples =2 ;
 	LineConf->ransacLineThreshold =0.2;
 	LineConf->ransacLineScoreThreshold=10;
 	LineConf->checkLaneWidthMean = 25;
@@ -90,6 +118,9 @@ int main()
 	LineConf->ransacSplineWindow = 10;
 	LineConf->ransacLine = 0;
 	LineConf->ransacSpline = 1;
+	LineConf->ipmWindowClear = 1;
+	LineConf->ipmWindowLeft=350;
+	LineConf->ipmWindowRight=550;
 
 	ifstream fin("C:\\Users\\bowen\\Documents\\TCL\\LaneDetection\\video0\\imagelist.txt");
 	char str[250][256];//存300个图像路径的字符数组
@@ -119,27 +150,21 @@ int main()
 
 		imageGrey.convertTo(imageGrey, CV_32F);
 		const CvMat cvImage = imageGrey;
-		const CvMat clrImage = imageResize.clone();
+		const CvMat clrImage = imageResize;
 		CvMat *ipm;
 		ipm = cvCreateMat(cvImage.height, cvImage.width, cvImage.type);
-		mcvGetIPM(&cvImage, ipm, &ipmInfo, &cameraInfo);  //image after IPM
+		mcvGetIPM(&cvImage, ipm, &ipmInfo, &cameraInfo);  //image after IPM 
+		SHOW_IMAGE(ipm,"ipm",1);
 		CvMat *ipm_clone = cvCloneMat(ipm);
+		Mat ipm_mat = Mat(ipm, true);
+		ipm_mat.convertTo(ipm_mat, CV_8U);
+		laneMarkingsDetector(ipm_mat, ipm_mat, _laneWidth*_scale);
+		threshold(ipm_mat, ipm_mat, 50,255,THRESH_BINARY);
+		morphologyEx(ipm_mat, ipm_mat, MORPH_OPEN, Mat(3,3, CV_8U),Point(-1,-1),1);
+		ipm_mat.convertTo(ipm_mat, CV_32F);
+		ipm = &CvMat(ipm_mat);
 
-		//SHOW_IMAGE(ipm, "IPM", 10);
-		float sigmax = 76.5 * ipmInfo.xScale;
-		//float sigmax = 1;
-		float sigmay = 1500 * ipmInfo.yScale;
-		//float sigmay = 1;
-		mcvFilterLines(ipm, ipm, 4, 4, sigmax, sigmay, LINE_HORIZONTAL);
-		mcvFilterLines(ipm, ipm, 2, 2, sigmax, sigmay, LINE_VERTICAL);  //IPM image after filtering and thresholding
-		//SHOW_IMAGE(ipm, "IPM after Filtering", 10);
 
-		//zero out points outside the image in IPM view
-		list<CvPoint> outPixels;
-		list<CvPoint>::iterator outPixelsi;
-		for (outPixelsi = outPixels.begin(); outPixelsi != outPixels.end(); outPixelsi++)
-			CV_MAT_ELEM(*ipm, float, (*outPixelsi).y, (*outPixelsi).x) = 0;
-		outPixels.clear();
 
 
 		if (LineConf->ipmWindowClear)
@@ -153,39 +178,66 @@ int main()
 			mcvSetMat(ipm, mask, 0);
 		}
 
-		//zero out negative values
-		mcvThresholdLower(ipm, ipm, 0);
-		//compute quantile: .985
-		float lowerQuantile = 0.975;
-		FLOAT qtileThreshold = mcvGetQuantile(ipm, lowerQuantile);
-		mcvThresholdLower(ipm, ipm, qtileThreshold);
-		//SHOW_IMAGE(ipm, "Before Hough", 1);
+		vector<Line> window(4);
+		Line edge;
+		edge.startPoint.x = LineConf->ipmWindowLeft;
+		edge.startPoint.y = 0;
+		edge.endPoint.x = LineConf->ipmWindowLeft;
+		edge.endPoint.y = ipm->height;
+		window[0] = edge;
+		edge.startPoint.x = LineConf->ipmWindowLeft;
+		edge.startPoint.y = ipm->height;
+		edge.endPoint.x = LineConf->ipmWindowRight;
+		edge.endPoint.y = ipm->height;
+		window[1] = edge;
+
+		edge.startPoint.x = LineConf->ipmWindowRight;
+		edge.startPoint.y = ipm->height;
+		edge.endPoint.x = LineConf->ipmWindowRight;
+		edge.endPoint.y = 0;
+		window[2] = edge;
+		edge.startPoint.x = LineConf->ipmWindowRight;
+		edge.startPoint.y = 0;
+		edge.endPoint.x = LineConf->ipmWindowLeft;
+		edge.endPoint.y = 0;
+		window[3] = edge;
+
+
+
+
+		
 
 		vector<float> lineScores, splineScores;
 		vector<Spline>Splines;
 		vector<Line> Lines;
 		///////////Hough Grouping Gonfig
-		LineConf->rMin = 0.2*ipm->height;
-		LineConf->rMax = 0.8*ipm->height;
+		LineConf->rMin = 0.5*ipm->height;
+		LineConf->rMax = 1*ipm->height;
 		mcvGetHoughTransformLines(ipm, &Lines, &lineScores, LineConf->rMin, LineConf->rMax, LineConf->rStep, LineConf->thetaMin, LineConf->thetaMax, LineConf->thetaStep, LineConf->binarize, LineConf->localMaxima, LineConf->detectionThreshold, LineConf->smoothScores, LineConf->group, LineConf->groupThreshold);
 		//mcvCheckLaneWidth(Lines, lineScores,LineConf->checkLaneWidthMean,LineConf->checkLaneWidthStd);
-		//mcvGetRansacLines(ipm,Lines,lineScores,LineConf,LINE_VERTICAL);
 		LineState *state = new LineState;
-		mcvGetRansacSplines(ipm,Lines,lineScores,LineConf,LINE_VERTICAL,Splines,splineScores,state);
+		mcvGetRansacSplines(ipm, Lines, lineScores, LineConf, LINE_VERTICAL, Splines, splineScores, state);
 		CvMat imDisplay = imageResize;
 		CvSize inSize = cvSize(imDisplay.width - 1, imDisplay.height - 1);
 		vector<Spline> Splines_ipm = Splines;
-		mcvSplinesImIPM2Im(Splines,ipmInfo,cameraInfo,inSize);
+		mcvLinesImIPM2Im(window, ipmInfo, cameraInfo, inSize);
+		mcvSplinesImIPM2Im(Splines, ipmInfo, cameraInfo, inSize);
 		CvMat *fipm = cvCloneMat(ipm);
 		//mcvPostprocessLines(&cvImage, &clrImage, fipm, ipm, Lines, lineScores,Splines, splineScores,LineConf, state, ipmInfo, cameraInfo);
 
+		for (int i = 0; i < window.size(); i++)
+		{
+			mcvDrawLine(&imDisplay, window[i], CV_RGB(0, 0, 255), 1);
+		}
 		for (int i = 0; i < Splines.size(); i++)
 		{
 			mcvDrawSpline(ipm_clone, Splines_ipm[i], CV_RGB(255, 0, 0), 1);
 			mcvDrawSpline(&imDisplay, Splines[i], CV_RGB(0, 255, 0), 3);
 		}
-		SHOW_IMAGE(ipm_clone,"Detected Lanes_IPM",1);
+		SHOW_IMAGE(ipm_clone, "Detected Lanes_IPM", 1);
 		SHOW_IMAGE(&imDisplay, "Detected Lanes", 1);
+
+
 
 
 		waitKey(1);
