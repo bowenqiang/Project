@@ -97,8 +97,8 @@ int main()
 	LineConf->ransacLineNumSamples =2 ;
 	LineConf->ransacLineThreshold =0.2;
 	LineConf->ransacLineScoreThreshold=10;
-	LineConf->checkLaneWidthMean = 25;
-	LineConf->checkLaneWidthStd = 5;
+	LineConf->checkLaneWidthMean = 250*_scale;
+	LineConf->checkLaneWidthStd = 50*_scale;
 	LineConf->ransacLineBinarize=1;
 	LineConf->ransacSplineDegree;
 	LineConf->ransacSplineWindow=15;
@@ -214,16 +214,42 @@ int main()
 		LineConf->rMin = 0.5*ipm->height;
 		LineConf->rMax = 1*ipm->height;
 		mcvGetHoughTransformLines(ipm, &Lines, &lineScores, LineConf->rMin, LineConf->rMax, LineConf->rStep, LineConf->thetaMin, LineConf->thetaMax, LineConf->thetaStep, LineConf->binarize, LineConf->localMaxima, LineConf->detectionThreshold, LineConf->smoothScores, LineConf->group, LineConf->groupThreshold);
-		//mcvCheckLaneWidth(Lines, lineScores,LineConf->checkLaneWidthMean,LineConf->checkLaneWidthStd);
+		
+		mcvCheckLaneWidth(Lines, lineScores,LineConf->checkLaneWidthMean,LineConf->checkLaneWidthStd);
+		//mcvGetRansacLines(ipm, Lines, lineScores, LineConf, LINE_VERTICAL);
 		LineState *state = new LineState;
 		mcvGetRansacSplines(ipm, Lines, lineScores, LineConf, LINE_VERTICAL, Splines, splineScores, state);
+		//mcvGetSplinesBoundingBoxes(splines, lineType,cvSize(image->width, image->height),state->ipmBoxes);
+
+		//mcvPostprocessLines(&cvImage, &clrImage, fipm, ipm, Lines, lineScores,Splines, splineScores,LineConf, state, ipmInfo, cameraInfo);
+
+
 		CvMat imDisplay = imageResize;
 		CvSize inSize = cvSize(imDisplay.width - 1, imDisplay.height - 1);
 		vector<Spline> Splines_ipm = Splines;
 		mcvLinesImIPM2Im(window, ipmInfo, cameraInfo, inSize);
+		vector<Line> Lines_ipm = Lines;
+		mcvLinesImIPM2Im(Lines, ipmInfo, cameraInfo, inSize);
 		mcvSplinesImIPM2Im(Splines, ipmInfo, cameraInfo, inSize);
 		CvMat *fipm = cvCloneMat(ipm);
-		//mcvPostprocessLines(&cvImage, &clrImage, fipm, ipm, Lines, lineScores,Splines, splineScores,LineConf, state, ipmInfo, cameraInfo);
+		
+
+		Spline Splines_center;
+		if (Splines.size() == 2)
+		{
+			Splines_center.points[0].x = (Splines[0].points[0].x + Splines[1].points[0].x)/2;
+			Splines_center.points[0].y = (Splines[0].points[0].y + Splines[1].points[0].y)/2;
+			Splines_center.points[1].x = (Splines[0].points[1].x + Splines[1].points[1].x)/2;
+			Splines_center.points[1].y = (Splines[0].points[1].y + Splines[1].points[1].y)/2;
+			Splines_center.points[2].x = (Splines[0].points[2].x+ Splines[1].points[2].x)/2;
+			Splines_center.points[2].y = (Splines[0].points[2].y+ Splines[1].points[2].y)/2;
+			Splines_center.points[3].x = (Splines[0].points[3].x+ Splines[1].points[3].x)/2;
+			Splines_center.points[3].y = (Splines[0].points[3].y + Splines[1].points[3].y)/2;
+			Splines_center.degree = (Splines[0].degree + Splines[1].degree) / 2;
+		}
+		mcvDrawSpline(&imDisplay, Splines_center, CV_RGB(0, 0, 255),3);
+
+
 
 		for (int i = 0; i < window.size(); i++)
 		{
@@ -233,6 +259,11 @@ int main()
 		{
 			mcvDrawSpline(ipm_clone, Splines_ipm[i], CV_RGB(255, 0, 0), 1);
 			mcvDrawSpline(&imDisplay, Splines[i], CV_RGB(0, 255, 0), 3);
+		}
+		for (int i = 0; i < Lines.size(); i++)
+		{
+			mcvDrawLine(ipm_clone, Lines_ipm[i], CV_RGB(255, 255, 0), 1);
+			mcvDrawLine(&imDisplay, Lines[i], CV_RGB(0, 255, 255), 3);
 		}
 		SHOW_IMAGE(ipm_clone, "Detected Lanes_IPM", 1);
 		SHOW_IMAGE(&imDisplay, "Detected Lanes", 1);
