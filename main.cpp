@@ -67,6 +67,12 @@ void laneMarkingsDetector(cv::Mat &srcGRAY, cv::Mat &dstGRAY, int tau)
 }
 
 
+bool mycmp(Line line1,Line line2)
+{
+	return line1.startPoint.x < line2.startPoint.x;
+}
+
+
 int main()
 {
 	IPMInfo ipmInfo;
@@ -123,21 +129,34 @@ int main()
 	LineConf->ipmWindowRight=550;
 
 	ifstream fin("C:\\Users\\bowen\\Documents\\TCL\\LaneDetection\\video0\\imagelist.txt");
-	char str[250][256];//存300个图像路径的字符数组
+	char str[256];//存300个图像路径的字符数组
 	int n = 0;
-	Mat imageOrigin;
-	//Size dsize = Size(imageOrigin.cols*_scale,imageOrigin.rows*_scale);
-	Mat imageResize;
-	Mat imageGrey;
+
+	//kalmanfilter
+	KalmanFilter KF(4, 4, 0);
+	KF.transitionMatrix = *(Mat_<float>(4, 4) << 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1);
+	Mat_<float> measurement(4, 1);
+	measurement.setTo(Scalar(0));
+	setIdentity(KF.measurementMatrix);
+	setIdentity(KF.processNoiseCov, Scalar::all(1e-4));
+	setIdentity(KF.measurementNoiseCov, Scalar::all(1e-1));
+	setIdentity(KF.errorCovPost, Scalar::all(.1));
+
 	//VP vp(_laneWidth, _houghMinLength, _numVps);
-	while (fin.getline(str[n], 256) && n<250)   // 获取每个图像的路径
+	int frameidx = 1;
+	vector<Line> linesPre;
+	LineState *state = new LineState;
+	vector<Line> stateLine;
+	while (fin.getline(str, 256))   // 获取每个图像的路径
 	{
-		imageOrigin = imread(str[n], 1);
+		Mat imageOrigin = imread(str, 1);
 		if (!imageOrigin.data)
 		{
 			cout << "can't read data!" << endl;
 			return -1;
 		}
+		Mat imageResize;
+		Mat imageGrey;
 		resize(imageOrigin, imageResize, Size(), _scale, _scale, INTER_AREA);
 		cvtColor(imageResize, imageGrey, CV_RGB2GRAY);
 		Size size = imageResize.size();
@@ -164,9 +183,6 @@ int main()
 		ipm_mat.convertTo(ipm_mat, CV_32F);
 		ipm = &CvMat(ipm_mat);
 
-
-
-
 		if (LineConf->ipmWindowClear)
 		{
 			//check to blank out other periferi of the image
@@ -178,47 +194,69 @@ int main()
 			mcvSetMat(ipm, mask, 0);
 		}
 
-		vector<Line> window(4);
-		Line edge;
-		edge.startPoint.x = LineConf->ipmWindowLeft;
-		edge.startPoint.y = 0;
-		edge.endPoint.x = LineConf->ipmWindowLeft;
-		edge.endPoint.y = ipm->height;
-		window[0] = edge;
-		edge.startPoint.x = LineConf->ipmWindowLeft;
-		edge.startPoint.y = ipm->height;
-		edge.endPoint.x = LineConf->ipmWindowRight;
-		edge.endPoint.y = ipm->height;
-		window[1] = edge;
-
-		edge.startPoint.x = LineConf->ipmWindowRight;
-		edge.startPoint.y = ipm->height;
-		edge.endPoint.x = LineConf->ipmWindowRight;
-		edge.endPoint.y = 0;
-		window[2] = edge;
-		edge.startPoint.x = LineConf->ipmWindowRight;
-		edge.startPoint.y = 0;
-		edge.endPoint.x = LineConf->ipmWindowLeft;
-		edge.endPoint.y = 0;
-		window[3] = edge;
-
-
-
-
-		
-
 		vector<float> lineScores, splineScores;
 		vector<Spline>Splines;
 		vector<Line> Lines;
-		///////////Hough Grouping Gonfig
 		LineConf->rMin = 0.5*ipm->height;
 		LineConf->rMax = 1*ipm->height;
-		mcvGetHoughTransformLines(ipm, &Lines, &lineScores, LineConf->rMin, LineConf->rMax, LineConf->rStep, LineConf->thetaMin, LineConf->thetaMax, LineConf->thetaStep, LineConf->binarize, LineConf->localMaxima, LineConf->detectionThreshold, LineConf->smoothScores, LineConf->group, LineConf->groupThreshold);
-		
+		//detect the lines;
+		mcvGetHoughTransformLines(ipm, &Lines, &lineScores, LineConf->rMin, LineConf->rMax, LineConf->rStep, LineConf->thetaMin, LineConf->thetaMax, LineConf->thetaStep, LineConf->binarize, LineConf->localMaxima, LineConf->detectionThreshold, LineConf->smoothScores, LineConf->group, LineConf->groupThreshold);		
 		mcvCheckLaneWidth(Lines, lineScores,LineConf->checkLaneWidthMean,LineConf->checkLaneWidthStd);
+
+		sort(Lines.begin(), Lines.end(), mycmp);
 		//mcvGetRansacLines(ipm, Lines, lineScores, LineConf, LINE_VERTICAL);
-		LineState *state = new LineState;
-		mcvGetRansacSplines(ipm, Lines, lineScores, LineConf, LINE_VERTICAL, Splines, splineScores, state);
+		//add kalman filter here:
+
+		if (linesPre.size()<2)////////
+		{
+			if (Lines.size() == 2)
+			{
+				linesPre = Lines;
+				KF.statePre.at<float>(0) = linesPre[0].startPoint.x;
+				KF.statePre.at<float>(1) = linesPre[0].endPoint.x;
+				KF.statePre.at<float>(2) = linesPre[1].startPoint.x;
+				KF.statePre.at<float>(3) = linesPre[1].endPoint.x;
+				stateLine = linesPre;
+			}
+		}
+		else
+		{
+			if (Lines.empty())
+				Lines=linesPre;
+			if (Lines.size() == 1)
+			{
+				if (fabs(Lines[0].startPoint.x - linesPre[0].startPoint.x) > (LineConf->checkLaneWidthMean / 4))
+				{
+					Lines.push_back(linesPre[0]);
+					sort(Lines.begin(), Lines.end(), mycmp);
+				}
+				else
+				{
+					Lines.push_back(linesPre[1]);
+				}
+
+			}
+			Mat prediction = KF.predict();
+			//Point predictPt(prediction.at<float>(0), prediction.at<float>(1));
+			measurement(0) = Lines[0].startPoint.x;
+			measurement(1) = Lines[0].endPoint.x;
+			measurement(2) = Lines[1].startPoint.x;
+			measurement(3) = Lines[1].endPoint.x;
+			Mat estimated = KF.correct(measurement);
+			stateLine[0].startPoint.x = estimated.at<float>(0);
+			stateLine[0].startPoint.y = 0;
+			stateLine[0].endPoint.x = estimated.at<float>(1);
+			stateLine[0].endPoint.y = 540;
+			stateLine[1].startPoint.x = estimated.at<float>(2);
+			stateLine[1].startPoint.y = 0;
+			stateLine[1].endPoint.x = estimated.at<float>(3);
+			stateLine[1].endPoint.y = 540;
+			linesPre = Lines;
+		}
+
+
+
+		//mcvGetRansacSplines(ipm, Lines, lineScores, LineConf, LINE_VERTICAL, Splines, splineScores, state);
 		//mcvGetSplinesBoundingBoxes(splines, lineType,cvSize(image->width, image->height),state->ipmBoxes);
 
 		//mcvPostprocessLines(&cvImage, &clrImage, fipm, ipm, Lines, lineScores,Splines, splineScores,LineConf, state, ipmInfo, cameraInfo);
@@ -226,40 +264,22 @@ int main()
 
 		CvMat imDisplay = imageResize;
 		CvSize inSize = cvSize(imDisplay.width - 1, imDisplay.height - 1);
-		vector<Spline> Splines_ipm = Splines;
-		mcvLinesImIPM2Im(window, ipmInfo, cameraInfo, inSize);
+		//vector<Spline> Splines_ipm = Splines;
 		vector<Line> Lines_ipm = Lines;
 		mcvLinesImIPM2Im(Lines, ipmInfo, cameraInfo, inSize);
-		mcvSplinesImIPM2Im(Splines, ipmInfo, cameraInfo, inSize);
+		//mcvSplinesImIPM2Im(Splines, ipmInfo, cameraInfo, inSize);
 		CvMat *fipm = cvCloneMat(ipm);
-		
+		vector<Line> stateLine_ipm = stateLine;
+		mcvLinesImIPM2Im(stateLine, ipmInfo, cameraInfo, inSize);
+		//mcvLinesImIPM2Im(stateLine, ipmInfo, cameraInfo, inSize);
 
-		Spline Splines_center;
-		if (Splines.size() == 2)
-		{
-			Splines_center.points[0].x = (Splines[0].points[0].x + Splines[1].points[0].x)/2;
-			Splines_center.points[0].y = (Splines[0].points[0].y + Splines[1].points[0].y)/2;
-			Splines_center.points[1].x = (Splines[0].points[1].x + Splines[1].points[1].x)/2;
-			Splines_center.points[1].y = (Splines[0].points[1].y + Splines[1].points[1].y)/2;
-			Splines_center.points[2].x = (Splines[0].points[2].x+ Splines[1].points[2].x)/2;
-			Splines_center.points[2].y = (Splines[0].points[2].y+ Splines[1].points[2].y)/2;
-			Splines_center.points[3].x = (Splines[0].points[3].x+ Splines[1].points[3].x)/2;
-			Splines_center.points[3].y = (Splines[0].points[3].y + Splines[1].points[3].y)/2;
-			Splines_center.degree = (Splines[0].degree + Splines[1].degree) / 2;
-		}
-		mcvDrawSpline(&imDisplay, Splines_center, CV_RGB(0, 0, 255),3);
-
-
-
-		for (int i = 0; i < window.size(); i++)
-		{
-			mcvDrawLine(&imDisplay, window[i], CV_RGB(0, 0, 255), 1);
-		}
-		for (int i = 0; i < Splines.size(); i++)
-		{
-			mcvDrawSpline(ipm_clone, Splines_ipm[i], CV_RGB(255, 0, 0), 1);
-			mcvDrawSpline(&imDisplay, Splines[i], CV_RGB(0, 255, 0), 3);
-		}
+		//for (int i = 0; i < Splines.size(); i++)
+		//{
+		//	mcvDrawSpline(ipm_clone, Splines_ipm[i], CV_RGB(255, 0, 0), 1);
+		//	mcvDrawSpline(&imDisplay, Splines[i], CV_RGB(0, 255, 0), 3);
+		//}
+		mcvDrawLine(&imDisplay, stateLine[0], CV_RGB(255, 0, 0), 3);
+		mcvDrawLine(&imDisplay, stateLine[1], CV_RGB(0, 0, 255), 3);
 		for (int i = 0; i < Lines.size(); i++)
 		{
 			mcvDrawLine(ipm_clone, Lines_ipm[i], CV_RGB(255, 255, 0), 1);
@@ -268,14 +288,17 @@ int main()
 		SHOW_IMAGE(ipm_clone, "Detected Lanes_IPM", 1);
 		SHOW_IMAGE(&imDisplay, "Detected Lanes", 1);
 
-
-
+		frameidx++;
 
 		waitKey(1);
+		//release memory
+
+
 	}
 
 
 
-
+	delete state;
+	delete LineConf;
 	return 0;
 }
